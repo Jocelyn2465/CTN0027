@@ -1,0 +1,117 @@
+---
+title: "MIRL"
+output: html_notebook
+---
+#set up
+```{r setup}
+knitr::opts_knit$set(root.dir = "C:/Users/yingj/OneDrive/Documents/data-cleaned")
+```
+
+#clean data
+```{r}
+#load all substances
+##0
+opd <- read.csv("opioid.csv")
+##1
+amp <- read.csv("amphetamines.csv")
+##2
+ben <- read.csv("Benzodiazapines.csv")
+##3
+can <- read.csv("Cannabinoids.csv")
+##4
+coc <- read.csv("Cocaine metabolites.csv")
+##5
+mtd <- read.csv("Methadone.csv")
+##6
+mtp <- read.csv("Methamphetamine.csv")
+##7
+oxy <- read.csv("Oxycodone.csv")
+##8
+pph <- read.csv("Propoxyphene.csv")
+
+#first four weeks for all 9 substances
+first4wk <- data.frame(opd$BASELINE, opd$WK1, opd$WK2, opd$WK3, opd$WK4,
+                       amp$BASELINE, amp$WK1, amp$WK2, amp$WK3, amp$WK4,
+                       ben$BASELINE, ben$WK1, ben$WK2, ben$WK3, ben$WK4,
+                       can$BASELINE, can$WK1, can$WK2, can$WK3, can$WK4,
+                       coc$BASELINE, coc$WK1, coc$WK2, coc$WK3, coc$WK4,
+                       mtd$BASELINE, mtd$WK1, mtd$WK2, mtd$WK3, mtd$WK4,
+                       mtp$BASELINE, mtp$WK1, mtp$WK2, mtp$WK3, mtp$WK4,
+                       oxy$BASELINE, oxy$WK1, oxy$WK2, oxy$WK3, oxy$WK4,
+                       pph$BASELINE, pph$WK1, pph$WK2, pph$WK3, pph$WK4)
+
+#treatement
+t <- opd$treatment
+
+#outcome
+outcome <- opd[,c("WK21", "WK22", "WK23", "WK24")]
+
+#2,-5 all treated as NA
+#?These are people who showed up but result is unclear?
+first4wk[first4wk==2] <- NA
+first4wk[first4wk==-5] <- NA
+apply(first4wk, 2, table)
+```
+#missing pattern
+```{r}
+library(Amelia)
+missmap(first4wk)
+first4wk <- data.frame(apply(first4wk, 2, as.factor))
+```
+#multiple imputation chained equation
+```{r}
+#?consider all the variables as coutinous
+library(mice)
+fillin <- mice(data = first4wk, 
+                   method = "logreg") 
+fillin$imp$ben.WK4 #predictions look nice
+complete.data5 <- complete(fillin, 5)
+complete.data4 <- complete(fillin, 4)
+complete.data3 <- complete(fillin, 3)
+complete.data2 <- complete(fillin, 2)
+complete.data1 <- complete(fillin, 1)
+complete.data <- list(complete.data1, complete.data2, complete.data3, complete.data4,
+                      complete.data5)
+```
+#binary outcome
+```{r}
+outcome$pat <- apply(outcome, 1, paste, collapse = "")
+y <- ifelse(outcome$pat=="0000", 0, 1)
+table(y)
+y <- as.factor(y)
+```
+#random lasso
+##scalars
+```{r}
+#p = 1082, n = 1269
+p <- 1082
+n <- nrow(first4wk)
+f <- formula(y~.^2)
+```
+#importance measure
+```{r}
+library(glmnet)
+boot.samp <- list()
+boot.coef <- list()
+
+for(b in 1:10){
+  boot.ind <- sample(1:n, n)
+  boot.coef[[b]] <- matrix(NA, nrow = 5, ncol = p + 1)
+  boot.samp[[b]] <- list(NA)
+  for(m in 1:5){
+    all.data <- cbind(complete.data[[m]], t, y)
+    boot.samp[[b]][[m]] <- all.data[boot.ind, ]
+    x.mat <- model.matrix(f, data = boot.samp[[b]][[m]])
+    y.mat <- boot.samp[[b]][[m]]$y
+    mod <- cv.glmnet(x = x.mat, y = y.mat, 
+                     family = "binomial",
+                     type.measure = "class",
+                     nfolds = 5,
+                     alpha = 1)
+    beta <- as.vector(t(coef(mod,s="lambda.min")))
+    boot.coef[[b]][m, ] <- beta
+  }
+}
+
+
+```
